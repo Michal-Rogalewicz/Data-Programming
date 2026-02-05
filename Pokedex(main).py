@@ -4,11 +4,19 @@ from PIL import Image, ImageTk
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 import numpy as np
+import os
+import requests
+from io import BytesIO
+
+# Create images directory if it doesn't exist
+if not os.path.exists("images"):
+    os.makedirs("images")
+    print("Created 'images' folder for caching Pokémon sprites")
 
 # Load pokemon data
 pokemon_df = pd.read_csv("Assets/pokemon_data.csv")
 
-# --- Navy theme (NEW) ---
+# --- Navy theme ---
 NAVY_BG = "#06162f"
 NAVY_PANEL = "#0b2347"
 NAVY_CARD = "#0f2f5e"
@@ -30,6 +38,53 @@ STAT_FIELDS = ["HP", "Attack", "Defense", "Speed"]
 
 # Store current pokemon for charts
 current_pokemon = None
+
+
+def fetch_pokemon_image(pokemon_id, pokemon_name):
+    """
+    Fetch Pokémon image from PokéAPI and cache it locally.
+    Returns the PIL Image object or None if failed.
+    """
+    # Check if image already exists locally
+    local_paths = [
+        f"images/{pokemon_id}.png",
+        f"images/{pokemon_name.lower()}.png"
+    ]
+
+    for path in local_paths:
+        if os.path.exists(path):
+            try:
+                return Image.open(path)
+            except:
+                continue
+
+    # If not cached, fetch from PokéAPI
+    try:
+        # PokéAPI uses numeric IDs
+        url = f"https://pokeapi.co/api/v2/pokemon/{pokemon_id}"
+        response = requests.get(url, timeout=5)
+
+        if response.status_code == 200:
+            data = response.json()
+            # Get the official artwork (high quality)
+            image_url = data['sprites']['other']['official-artwork']['front_default']
+
+            if image_url:
+                img_response = requests.get(image_url, timeout=5)
+                if img_response.status_code == 200:
+                    img = Image.open(BytesIO(img_response.content))
+
+                    # Save to cache
+                    cache_path = f"images/{pokemon_id}.png"
+                    img.save(cache_path)
+                    print(f"Downloaded and cached: {pokemon_name} (ID: {pokemon_id})")
+
+                    return img
+    except Exception as e:
+        print(f"Failed to fetch image for {pokemon_name}: {e}")
+
+    return None
+
 
 # Create main window
 window = tk.Tk()
@@ -178,7 +233,7 @@ def themed_button(parent, text, command):
                      command=command)
 
 
-# Chart functions (unchanged logic, just uses STAT_FIELDS)
+# Chart functions
 def show_bar_chart():
     if current_pokemon is None:
         return
@@ -310,7 +365,7 @@ def show_radar_chart():
     canvas.get_tk_widget().pack(fill="both", expand=True)
 
 
-# Create chart buttons (same layout, themed)
+# Create chart buttons
 themed_button(buttons_container, "Bar Chart", show_bar_chart).pack(pady=10)
 themed_button(buttons_container, "Line Graph", show_line_graph).pack(pady=10)
 themed_button(buttons_container, "Horizontal Bar Chart", show_horizontal_bar).pack(pady=10)
@@ -337,26 +392,28 @@ def display_pokemon(pokemon):
     global current_pokemon
     current_pokemon = pokemon
 
-    # Try to load pokemon image
+    # Fetch and display pokemon image
     try:
-        pokemon_id = pokemon.get("#", "")
-        pokemon_name = pokemon["Name"].lower()
+        pokemon_id = str(int(pokemon.get("#", 0)))
+        pokemon_name = pokemon["Name"]
 
-        image_paths = [f"images/{pokemon_id}.png", f"images/{pokemon_name}.png"]
+        # Fetch image (will use cache if available)
+        img = fetch_pokemon_image(pokemon_id, pokemon_name)
 
-        for path in image_paths:
-            try:
-                img = Image.open(path).resize((250, 250), Image.Resampling.LANCZOS)
-                photo = ImageTk.PhotoImage(img)
-                pokemon_image_label.config(image=photo)
-                pokemon_image_label.image = photo
-                break
-            except:
-                continue
+        if img:
+            # Resize and display
+            img = img.resize((250, 250), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            pokemon_image_label.config(image=photo)
+            pokemon_image_label.image = photo
         else:
-            pokemon_image_label.config(image="")
-    except:
-        pokemon_image_label.config(image="")
+            # Show placeholder text if image fetch failed
+            pokemon_image_label.config(image="", text="Image not available",
+                                       font=("Helvetica", 12), fg="#888888")
+    except Exception as e:
+        print(f"Error displaying image: {e}")
+        pokemon_image_label.config(image="", text="Image not available",
+                                   font=("Helvetica", 12), fg="#888888")
 
     # Update labels
     pokemon_name_label.config(text=pokemon["Name"])
@@ -391,7 +448,7 @@ def submit():
         status_label.config(text="Please enter a Pokémon name", fg="#ffcc00")
         return
 
-    # same behavior: partial match, take first result
+    # Partial match, take first result
     result = pokemon_df[pokemon_df["Name"].str.lower().str.contains(search_name, na=False)]
 
     if not result.empty:
@@ -402,7 +459,7 @@ def submit():
         status_label.config(text="Pokémon not found", fg="#ff4444")
 
 
-# Search button (kept here so submit exists)
+# Search button
 search_button = tk.Button(search_frame, text="Search",
                           font=("Helvetica", 14, "bold"),
                           bg=NAVY_BTN, fg=TEXT, padx=30, pady=10,
